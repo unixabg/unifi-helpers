@@ -111,13 +111,17 @@ This script supports **two modes**:
 Give it a devices file:
 
 ```bash
-./unifi-vlan-reboot devices.txt
+# Batch with key
+./unifi-vlan-reboot --file devices.txt --key ~/.ssh/id_rsa
+# Batch with password
+./unifi-vlan-reboot --file devices.txt
 ```
 
 ### **B. One-off mode**
 
 ```bash
-./unifi-vlan-reboot 172.16.98.45 admin 13
+./unifi-vlan-reboot --ip 172.16.98.45 --username admin --port 13
+./unifi-vlan-reboot --ip 172.16.98.45 --username admin --port 13 --key ~/.ssh/id_rsa
 ```
 
 ---
