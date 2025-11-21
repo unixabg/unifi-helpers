@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Usage:
-#   Batch mode (file):
-#     ./unifi-vlan-reboot devices.txt
-#       where each line is: <SWITCH_IP> <SSH_USER> <PORT>
-#
 #   Single mode:
-#     ./unifi-vlan-reboot <SWITCH_IP> <SSH_USER> <PORT>
+#     ./unifi-vlan-reboot --ip <SWITCH_IP> --username <SSH_USER> --port <PORT> [--key <id_rsa>]
+#
+#   Batch mode (file):
+#     ./unifi-vlan-reboot --file devices.txt [--key <id_rsa>]
+#       where each line is: <SWITCH_IP> <SSH_USER> <PORT>
 
 # ---------- Password handling ----------
 # If outer script set DEVICES_SSH_PASSWORD, use it
@@ -17,8 +17,58 @@ fi
 # If still empty, maybe user exported SSH_PASSWORD manually
 SSH_PASSWORD="${SSH_PASSWORD:-}"
 
-# We'll prompt *once* if still empty, before running anything
+# ----------- Argument Parsing (long options) -----------
+SWITCH_IP=""
+SSH_USER=""
+PORT=""
+DEVICE_FILE=""
+SSH_KEY=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ip)
+            SWITCH_IP="$2"
+            shift 2
+            ;;
+        --username|--user)
+            SSH_USER="$2"
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --file)
+            DEVICE_FILE="$2"
+            shift 2
+            ;;
+        --key)
+            SSH_KEY="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage:"
+            echo "  Single mode:"
+            echo "    $0 --ip <SWITCH_IP> --username <SSH_USER> --port <PORT> [--key <id_rsa>]"
+            echo
+            echo "  Batch mode:"
+            echo "    $0 --file devices.txt [--key <id_rsa>]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# ---------- Function for password if no keyfile ----------
 prompt_for_password() {
+    # Only needed if we're NOT using a key
+    if [[ -n "$SSH_KEY" ]]; then
+        return
+    fi
+
     if [[ -z "$SSH_PASSWORD" ]]; then
         read -s -p "SSH Password: " SSH_PASSWORD
         echo
@@ -39,42 +89,57 @@ run_one() {
 
     echo "Processing: $SWITCH_IP $SSH_USER $PORT"
 
-    sshpass -e ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$SSH_USER@$SWITCH_IP" \
-        "swctrl poe restart id $PORT"
+    if [[ -n "$SSH_KEY" ]]; then
+        # Key-based auth
+        ssh -i "$SSH_KEY" -n \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            "$SSH_USER@$SWITCH_IP" \
+            "swctrl poe restart id $PORT"
+    else
+        # Password-based auth via sshpass
+        sshpass -e ssh -n \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            "$SSH_USER@$SWITCH_IP" \
+            "swctrl poe restart id $PORT"
+    fi
 }
 
-# ---------- Batch mode (file) ----------
-if [[ -f "$1" && "$#" -eq 1 ]]; then
-    INPUT_FILE="$1"
+# ----------- Execution Mode Detection -----------
+
+# Batch mode
+if [[ -n "$DEVICE_FILE" ]]; then
+    if [[ ! -f "$DEVICE_FILE" ]]; then
+        echo "Device file not found: $DEVICE_FILE"
+        exit 1
+    fi
+
+    # Only prompt if not using key
     prompt_for_password
 
-    # Loop over every non-empty line: <IP> <USER> <PORT>
-    while read -r IP USER PORT; do
-        # Skip blank lines
-        [[ -z "$IP" ]] && continue
+    # ----------- Batch Mode Loop -----------
+    while IFS=' ' read -r FILE_IP FILE_USER FILE_PORT; do
+        # Skip empty lines / comments
+        [[ -z "$FILE_IP" ]] && continue
+        [[ "$FILE_IP" =~ ^# ]] && continue
 
-        run_one "$IP" "$USER" "$PORT"
-    done < "$INPUT_FILE"
+        run_one "$FILE_IP" "$FILE_USER" "$FILE_PORT"
+    done < "$DEVICE_FILE"
 
-    echo "Done with file run."
+    echo "Done."
     # Cleanup
     unset SSHPASS
     unset SSH_PASSWORD
     exit 0
 fi
 
-# ---------- Single mode (3 args) ----------
-if [[ "$#" -ne 3 ]]; then
-    echo "Usage:"
-    echo "  $0 devices.txt"
-    echo "  OR"
-    echo "  $0 <SWITCH_IP> <SSH_USER> <PORT>"
+# Single mode
+if [[ -z "$SWITCH_IP" || -z "$SSH_USER" || -z "$PORT" ]]; then
+    echo "Missing required arguments."
+    echo "Run with --help for usage."
     exit 1
 fi
-
-SWITCH_IP="$1"
-SSH_USER="$2"
-PORT="$3"
 
 prompt_for_password
 run_one "$SWITCH_IP" "$SSH_USER" "$PORT"
